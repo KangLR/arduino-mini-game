@@ -1,0 +1,577 @@
+#include<U8x8lib.h>
+#include<Keypad.h>
+#include <stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#define WindowWidth 3
+#define WindowHeight 15
+#define BulletSpeed 1
+U8X8_SSD1306_128X64_ALT0_HW_I2C u8x8(/* reset=*/ U8X8_PIN_NONE);
+
+//键盘检测
+const int numRows = 4;
+const int numCols = 4;
+char keymap[numRows][numCols] = {
+  {'1', '2', '3', '4'},
+  {'5', '6', '7', '8'},
+  {'9', 'A', 'B', 'C'},
+  {'D', 'E', 'F', 'G'}
+};
+byte rowPins[numRows] = {9, 8, 7, 2};
+byte colPins[numCols] = {13, 12, 11, 10};
+Keypad keypad = Keypad(makeKeymap(keymap), rowPins, colPins, numRows, numCols);
+
+
+//间隔
+int i=0;
+//控制界面选择
+bool mapFlag=true;
+
+//敌人
+typedef struct aircraft
+{
+    float x;
+    float y;
+    float speed;
+    struct aircraft *pre;
+    struct aircraft *next;
+}enemy;
+
+//子弹
+typedef struct bullet
+{
+    float x;
+    float y;
+    struct bullet *pre;
+    struct bullet *next;
+}bullet;
+
+//玩家
+typedef struct myPlane
+{
+    float x;
+    float y;
+    int life;
+    int score;
+}myPlane;
+
+//记录榜
+typedef struct scoreRank
+{
+    int score1;
+    int score2;
+    int score3;
+}rank;
+
+//按时间敌人速度越来越快
+float speedFactor=1;
+
+rank rank1={0,0,0};
+
+
+//我
+myPlane myPlane1;
+
+
+//敌人链表头结点和尾节点
+enemy* head=NULL;
+enemy* tail=NULL;
+
+//子弹链表头结点和为节点
+bullet* headBullet=NULL;
+bullet* tailBullet=NULL;
+
+
+//创建敌人
+enemy* create_enemy(void){
+  enemy* p=(enemy*)malloc(sizeof(enemy));
+  p->x=rand()%4;
+  p->y=15;
+  p->speed=1; //这里用speedFactor，但先不用
+  p->pre=NULL;
+  p->next=NULL;
+  Serial.print("创建敌人");
+  return p;
+}
+
+
+
+//把创建的敌人插入到链表尾
+void insert_enemy_tail(enemy* node){
+  if(head==NULL){
+    head=tail=node;
+  }else if(head==tail){
+    head->next=node;
+    node->pre=head;
+    tail=node;
+  }else{
+    tail->next=node;
+    node->pre=tail;
+    tail=node;
+  }
+}
+
+//删除敌人
+enemy* delete_enemy(enemy* node){
+  if(head==node){
+    head=node->next;
+    if(tail==node){
+      tail=NULL;
+    }
+    node->next=NULL;
+    free(node);
+    return head;
+  }else if(tail==node){
+    node->pre->next=NULL;
+    tail=node->pre;
+    node->pre=NULL;
+    free(node);
+    return NULL;
+  }else{
+    node->pre->next=node->next;
+    node->next->pre=node->pre;
+    enemy* temp=node->next;
+    node->pre=NULL;
+    node->next=NULL;
+    free(node);
+    return node->next;
+  }
+}
+
+
+//创建子弹
+bullet* create_bullet(void){
+  bullet* q=(bullet*)malloc(sizeof(bullet));
+  q->x=myPlane1.x;
+  q->y=myPlane1.y+1;
+  q->pre=NULL;
+  q->next=NULL;
+  return q;
+}
+
+//把子弹插入到链表尾
+void insert_bullet_tail(bullet* node){
+  if(headBullet==NULL){
+    headBullet=tailBullet=node;
+  }else if(headBullet==tailBullet){
+    headBullet->next=node;
+    node->pre=headBullet;
+    tailBullet=node;
+  }else{
+    tailBullet->next=node;
+    node->pre=tailBullet;
+    tailBullet=node;
+  }
+}
+
+//删除子弹
+bullet* delete_bullet(bullet* node){
+  if(headBullet==node){
+    headBullet=node->next;
+    if(tailBullet==node){
+      tailBullet=NULL;
+    }
+    node->next=NULL;
+    free(node);
+    return headBullet;
+  }else if(tailBullet==node){
+    node->pre->next=NULL;
+    tailBullet=node->pre;
+    node->pre=NULL;
+    free(node);
+    return NULL;
+  }else{
+    node->pre->next=node->next;
+    node->next->pre=node->pre;
+    bullet* temp=node->next;
+    node->pre=NULL;
+    node->next=NULL;
+    free(node);
+    return temp;
+  }
+}
+
+//指向头结点的临时节点
+enemy* temp1;
+bullet* temp2;
+
+void setup() {
+
+   //我初始化
+   myPlane1.x=(WindowWidth+1)/2;
+   myPlane1.y=0;
+   myPlane1.life=3;
+   myPlane1.score=0;
+
+  //蜂鸣器
+  pinMode(5,OUTPUT);
+  
+  Serial.begin(9600);
+  keypad.addEventListener(keypadEvent);  
+
+  u8x8.begin();
+  u8x8.setFlipMode(1);
+  u8x8.setFont(u8x8_font_amstrad_cpc_extended_f);
+  u8x8.clear();
+}
+
+void loop() {
+
+      if(mapFlag){
+        keypad.getKey();
+        u8x8.setCursor(5,1);
+        u8x8.print("Record");
+        u8x8.setCursor(4,2);
+        u8x8.print("Play Game");
+      }else{
+  
+      //检测键盘
+      keypad.getKey();
+
+      keypad.getKey();
+      //绘图
+      u8x8.setCursor(myPlane1.y,myPlane1.x);
+      u8x8.print("o"); 
+      temp1=head;
+      temp2=headBullet;
+      while(temp1!=NULL){
+        u8x8.setCursor(temp1->y,temp1->x);
+        u8x8.print("$");
+        temp1=temp1->next;
+      }
+      while(temp2!=NULL){
+        u8x8.setCursor(temp2->y,temp2->x);
+        u8x8.print("->");
+        temp2=temp2->next;
+      }
+
+     
+      keypad.getKey();
+      //子弹击中敌人
+      temp2=headBullet;
+      while(temp2!=NULL){
+        bool flag=true;
+        temp1=head;
+        while(temp1!=NULL){
+          if((temp2->x==temp1->x)&&(temp2->y>=temp1->y-1&&temp2->y<=temp1->y+1)){
+            bullet* temptemp3=temp2;
+            temp2=delete_bullet(temptemp3);
+            enemy* temptemp4=temp1;
+            temp1=delete_enemy(temptemp4);
+            flag=false;
+            myPlane1.score+=10;
+            analogWrite(5,64);
+            delay(30);
+            analogWrite(5,0);
+            Serial.print(myPlane1.score);
+            break;
+          }
+          temp1=temp1->next;
+        }
+        if(flag){
+          temp2=temp2->next;
+        }
+      }
+
+
+      keypad.getKey();
+      //敌人边界检测+移动
+      temp1=head;
+      while(temp1!=NULL){
+        temp1->y=(temp1->y)-0.2;
+        if((temp1->y)<0){
+          myPlane1.life-=1;
+          enemy* temptemp1=temp1;
+          temp1=delete_enemy(temptemp1);
+          continue;
+        }
+        temp1=temp1->next;
+      }
+      keypad.getKey();
+      //子弹边界检测+移动
+      temp2=headBullet;
+      while(temp2!=NULL){
+        temp2->y+=BulletSpeed;
+        if(temp2->y>14){
+          bullet* temptemp2=temp2;
+          temp2=delete_bullet(temptemp2);
+          continue;
+        }
+        temp2=temp2->next;
+      }
+
+      //通过三个敌人则失败
+      if(myPlane1.life==0){
+        Serial.print("通过三个敌人\n");
+        analogWrite(5,64);
+        delay(30);
+        analogWrite(5,0);
+        releaseResource();
+        //释放所有资源，一切初始化
+        keypad.waitForKey();
+      }
+
+      keypad.getKey();
+      //被敌人碰到则失败
+      temp1=head;
+      while(temp1!=NULL){
+        Serial.print("检测是否被敌人碰到\n");
+        if(temp1->x==myPlane1.x && temp1->y<=myPlane1.y+1 && temp1->y >=myPlane1.y){
+          analogWrite(5,64);
+          delay(30);
+          analogWrite(5,0);
+          releaseResource();
+          keypad.waitForKey();
+        }else{
+          temp1=temp1->next;
+        }
+      }
+
+      keypad.getKey();
+      delay(200); 
+      keypad.getKey();
+      //speedFactor+=0.2;
+      if(i%10==0){
+        insert_enemy_tail(create_enemy());//每秒创建一个敌人
+      }
+      i++;
+      keypad.getKey();
+      u8x8.clearDisplay();  
+      }
+}
+
+
+void keypadEvent(KeypadEvent key) {
+  switch (keypad.getState())
+  {
+    case PRESSED:
+      if (key == '1') {
+        if(mapFlag){         
+        }else{
+          //向上走
+          Serial.print("向上走");
+          if(myPlane1.y==WindowHeight-1){        
+          }else{
+            myPlane1.y+=1;
+          }
+        }
+      }
+      else if (key == '2') {
+        if(mapFlag){         
+        }else{
+          //向下走
+          Serial.print("向下走");
+          if(myPlane1.y==0){        
+          }else{
+            myPlane1.y-=1;
+          }
+        }
+      }
+      else if (key == '3') {
+        if(mapFlag){          
+        }else{
+          //向左走
+          Serial.print("向左走");
+          if(myPlane1.x==0){        
+          }else{
+            myPlane1.x-=1;
+          }
+        }
+      }
+      else if (key == '4') {
+        if(mapFlag){          
+        }else{
+          //向右走
+          Serial.print("向右走");
+          if(myPlane1.x==3){        
+          }else{
+            myPlane1.x+=1;
+          }
+        }
+      }
+      else if (key == '5') {
+        if(mapFlag){          
+        }else{
+        //射击
+        Serial.print("创建子弹");
+        insert_bullet_tail(create_bullet());
+        Serial.print("插入子弹");
+        }
+      }
+      else if (key == '6') {
+        if(mapFlag){
+          //进入积分页面
+          if(rank1.score1==0){
+            u8x8.clearDisplay();
+            u8x8.setCursor(4,1);
+            u8x8.print("No record!");
+            keypad.waitForKey();
+            u8x8.clearDisplay();
+          }else if(rank1.score2==0){
+            u8x8.clearDisplay();
+            u8x8.setCursor(7,1);
+            u8x8.print(rank1.score1);
+            keypad.waitForKey();
+            u8x8.clearDisplay();
+          }else if(rank1.score3==0){
+            u8x8.clearDisplay();
+            u8x8.setCursor(7,1);
+            u8x8.print(rank1.score1);
+            u8x8.setCursor(7,2);
+            u8x8.print(rank1.score2);
+            keypad.waitForKey();
+            u8x8.clearDisplay();
+          }else{
+            u8x8.clearDisplay();
+            u8x8.setCursor(7,1);
+            u8x8.print(rank1.score1);
+            u8x8.setCursor(7,2);
+            u8x8.print(rank1.score2);
+            u8x8.setCursor(7,3);
+            u8x8.print(rank1.score3);
+            keypad.waitForKey();
+            u8x8.clearDisplay();
+          }
+        }
+      }
+      else if (key == '7') {
+        if(mapFlag){
+          //开始游戏
+          mapFlag=false;
+        }
+      }
+      else if (key == '8') {
+        if(mapFlag){ 
+        }else{
+          //拓展功能：暂停
+          Serial.print("8");
+          keypad.waitForKey();
+        }
+      }
+      else if(key == '9'){
+        if(mapFlag){
+                            
+        }else{
+          analogWrite(5,128);
+          delay(30);
+          analogWrite(5,0);
+          //瞬间消灭所有敌人
+          temp1=head;
+          temp2=headBullet;
+          while(temp1!=NULL){
+            enemy* temptemp5=temp1;
+            temp1=temp1->next;
+            temptemp5->pre=NULL;
+            temptemp5->next=NULL;
+            free(temptemp5);
+            myPlane1.score+=10;
+          }
+          while(temp2!=NULL){
+            bullet* temptemp6=temp2;
+            temp2=temp2->next;
+            temptemp6->pre=NULL;
+            temptemp6->next=NULL;
+            free(temptemp6);
+          }
+          head=NULL;
+          tail=NULL;
+          headBullet=NULL;
+          tailBullet=NULL;
+        }
+      }
+      break;
+    case HOLD:
+      if (key == 'A') {
+        if(mapFlag){
+        }else{
+          //持续发射子弹
+          insert_bullet_tail(create_bullet());
+          insert_bullet_tail(create_bullet());
+          insert_bullet_tail(create_bullet());
+        }
+      }
+    default:
+      break;
+  }
+}
+
+
+void releaseResource(){
+    mapFlag=true;
+    u8x8.clearDisplay();
+    u8x8.setCursor(4,1);
+    u8x8.print("Game Over");
+    u8x8.setCursor(4,2);
+    u8x8.print("score:");
+    u8x8.setCursor(10,2);
+    u8x8.print(myPlane1.score);
+    Serial.print(myPlane1.score);
+    temp1=head;
+    temp2=headBullet;
+    while(temp1!=NULL){
+      enemy* temptemp5=temp1;
+      temp1=temp1->next;
+      temptemp5->pre=NULL;
+      temptemp5->next=NULL;
+      free(temptemp5);
+    }
+    while(temp2!=NULL){
+      bullet* temptemp6=temp2;
+      temp2=temp2->next;
+      temptemp6->pre=NULL;
+      temptemp6->next=NULL;
+      free(temptemp6);
+    }
+    head=NULL;
+    tail=NULL;
+    headBullet=NULL;
+    tailBullet=NULL;
+    myPlane1.x=(WindowWidth+1)/2;
+    myPlane1.y=0;
+    myPlane1.life=3;
+
+    if(rank1.score1==0){
+      rank1.score1=myPlane1.score;
+      myPlane1.score=0;
+    }else if(rank1.score2==0){
+      if(myPlane1.score<=rank1.score1){
+        rank1.score2=myPlane1.score;
+        myPlane1.score=0;
+      }else{
+        rank1.score2=rank1.score1;
+        rank1.score1=myPlane1.score;
+        myPlane1.score=0;
+      }
+    }else if(rank1.score3==0){
+      if(myPlane1.score<=rank1.score2){
+        rank1.score3=myPlane1.score;
+        myPlane1.score=0;
+      }else if(myPlane1.score<=rank1.score1){
+        rank1.score3=rank1.score2;
+        rank1.score2=myPlane1.score;
+        myPlane1.score=0;
+      }else{
+        rank1.score3=rank1.score2;
+        rank1.score2=rank1.score1;
+        rank1.score1=myPlane1.score;
+        myPlane1.score=0;
+      }
+    }else{
+      if(rank1.score1<=myPlane1.score){
+        rank1.score3=rank1.score2;
+        rank1.score2=rank1.score1;
+        rank1.score1=myPlane1.score;
+        myPlane1.score=0;
+      }else if(rank1.score2<=myPlane1.score){
+        rank1.score3=rank1.score2;
+        rank1.score2=myPlane1.score;
+        myPlane1.score=0;
+      }else if(rank1.score3<=myPlane1.score){
+        rank1.score3=myPlane1.score;
+        myPlane1.score=0;
+      }else{
+        //清零
+        myPlane1.score=0;
+      } 
+    }
+}
